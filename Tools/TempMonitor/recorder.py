@@ -15,6 +15,7 @@ import psycopg2
 from zoneinfo import ZoneInfo
 from config import OUTPUT_DIR as DEFAULT_OUTPUT_DIR
 from config import VIDEO_FPS
+from ping_listener import PingListener
 
 
 # Supabase (DB)
@@ -26,7 +27,7 @@ DB_CONN_STR = (
 
 # Czas z NTP
 
-NTP_SERVER = "192.168.1.100"
+NTP_SERVER = "0.pl.pool.ntp.org" #need to be changed to "192.168.1.100"
 NTP_PORT = 123
 NTP_DELTA = 2208988800 
 
@@ -109,9 +110,9 @@ class _DBWorker(threading.Thread):
 
         self._close_conn()
 
-    def enqueue(self, session_id: str, t_s: float, t1, t2, t3):
+    def enqueue(self, session_id: str, timestamp: datetime, t_s: float, t1, t2, t3, flag_id: uuid.UUID):
         try:
-            self.q.put_nowait((session_id, t_s, t1, t2, t3))
+            self.q.put_nowait((session_id, timestamp, t_s, t1, t2, t3, flag_id))
         except Exception as e:
             print("[DBW] enqueue failed:", e)
 
@@ -152,8 +153,8 @@ class _DBWorker(threading.Thread):
         try:
             self._cur.executemany(
                 """
-                INSERT INTO public.samples (session_id, t_s, temp_r1, temp_r2, temp_r3)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO public.samples (session_id, timestamp,t_s, temp_r1, temp_r2, temp_r3, flag_id)
+                VALUES (%s, %s,%s, %s, %s, %s)
                 """,
                 rows
             )
@@ -170,8 +171,8 @@ class _DBWorker(threading.Thread):
                 try:
                     self._cur.executemany(
                         """
-                        INSERT INTO public.samples (session_id, t_s, temp_r1, temp_r2, temp_r3)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO public.samples (session_id, timestamp, t_s, temp_r1, temp_r2, temp_r3, flag_id)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         rows
                     )
@@ -257,7 +258,7 @@ class SessionRecorder:
         # CSV
         self.csv_fh = open(csv_path, "w", newline="", encoding="utf-8")
         self.csv_wr = csv.writer(self.csv_fh, delimiter=';', lineterminator='\n')
-        self.csv_wr.writerow(["t_s", "temp_roi1_c", "temp_roi2_c", "temp_roi3_c"])
+        self.csv_wr.writerow(["timestamp", "t_s","temp_roi1_c", "temp_roi2_c", "temp_roi3_c", "flag_id"])
         self._csv_rows_since_flush = 0
 
         # JSON – metadane
@@ -281,6 +282,7 @@ class SessionRecorder:
 
         self.t0_mono = time.monotonic()
         self.measuring = True
+        self.flag_id = 0
 
         self._db_insert_session(self.session_id, self.started_utc, aborted=False)
 
@@ -288,7 +290,12 @@ class SessionRecorder:
             self._dbw = _DBWorker(self.db_conn_str, batch_size=200, flush_interval_s=0.5)
             self._dbw.start()
 
+        # w __init__ lub start_session:
+        self._ping_listener = PingListener(recorder=self, port=5050)
+        self._ping_listener.start()
+
         print(f"[REC] start session {self.session_id} -> {csv_path}")
+
 
     def log_sample_multi(self, temps_c):
         if not self.measuring:
@@ -296,6 +303,9 @@ class SessionRecorder:
         if self.csv_wr is None or self.t0_mono is None:
             return
 
+        flag_id = self.flag_id
+
+        timestamp = datetime.datetime.now()
         t_s = time.monotonic() - self.t0_mono
 
         t1 = temps_c[0] if len(temps_c) > 0 else None
@@ -307,7 +317,7 @@ class SessionRecorder:
                 return ""
             return f"{v:.2f}".replace('.', ',')
 
-        row = [f"{t_s:.3f}".replace('.', ','), f(t1), f(t2), f(t3)]
+        row = [timestamp, f"{t_s:.3f}".replace('.', ','), f(t1), f(t2), f(t3), ""]
         self.csv_wr.writerow(row)
         self._csv_rows_since_flush += 1
         if self._csv_rows_since_flush >= self._csv_flush_every:
@@ -319,7 +329,7 @@ class SessionRecorder:
             self._csv_rows_since_flush = 0
 
         if self.session_id is not None and self._dbw is not None:
-            self._dbw.enqueue(self.session_id, t_s, t1, t2, t3)
+            self._dbw.enqueue(self.session_id, timestamp, t_s, t1, t2, t3, flag_id)
 
     def _finalize_csv(self):
         if self.csv_fh:
@@ -371,6 +381,8 @@ class SessionRecorder:
         self.session_id = None
         self.json_path = None
 
+        if hasattr(self, '_ping_listener'):
+            self._ping_listener.stop()
         print("[REC] stop session")
 
     def mark_aborted(self):
