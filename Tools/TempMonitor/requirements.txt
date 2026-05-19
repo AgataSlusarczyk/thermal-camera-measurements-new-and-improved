@@ -1,0 +1,7 @@
+PySide6
+matplotlib
+numpy
+opencv-python
+pandas
+psycopg2-binary
+tornado
