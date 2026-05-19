@@ -26,7 +26,7 @@ DB_CONN_STR = (
 
 # Czas z NTP
 
-NTP_SERVER = "pool.ntp.org"
+NTP_SERVER = "192.168.1.100"
 NTP_PORT = 123
 NTP_DELTA = 2208988800 
 
