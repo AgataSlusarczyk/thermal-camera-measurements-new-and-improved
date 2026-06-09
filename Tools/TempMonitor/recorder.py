@@ -15,7 +15,7 @@ import psycopg2
 from zoneinfo import ZoneInfo
 from config import OUTPUT_DIR as DEFAULT_OUTPUT_DIR
 from config import VIDEO_FPS
-from ping_listener import PingListener
+from cam_listener import CamListener
 
 
 # Supabase (DB)
@@ -153,8 +153,8 @@ class _DBWorker(threading.Thread):
         try:
             self._cur.executemany(
                 """
-                INSERT INTO public.samples (session_id, timestamp,t_s, temp_r1, temp_r2, temp_r3, flag_id)
-                VALUES (%s, %s,%s, %s, %s, %s)
+                INSERT INTO public.samples (session_id, timestamp, t_s, temp_r1, temp_r2, temp_r3, flag_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 rows
             )
@@ -220,6 +220,10 @@ class SessionRecorder:
         self.session_id = None
         self.started_utc = None
 
+        # Ping
+        self.flag_id = 0
+        self._ping_listener = None
+
 
         self._dbw = None  # type: _DBWorker | None
 
@@ -258,7 +262,7 @@ class SessionRecorder:
         # CSV
         self.csv_fh = open(csv_path, "w", newline="", encoding="utf-8")
         self.csv_wr = csv.writer(self.csv_fh, delimiter=';', lineterminator='\n')
-        self.csv_wr.writerow(["timestamp", "t_s","temp_roi1_c", "temp_roi2_c", "temp_roi3_c", "flag_id"])
+        self.csv_wr.writerow(["timestamp", "t_s", "temp_roi1_c", "temp_roi2_c", "temp_roi3_c", "flag_id", "scenario", "duration_sec"])
         self._csv_rows_since_flush = 0
 
         # JSON – metadane
@@ -291,7 +295,7 @@ class SessionRecorder:
             self._dbw.start()
 
         # w __init__ lub start_session:
-        self._ping_listener = PingListener(recorder=self, port=5050)
+        self._ping_listener = CamListener(recorder=self, port=5050)
         self._ping_listener.start()
 
         print(f"[REC] start session {self.session_id} -> {csv_path}")
@@ -317,7 +321,7 @@ class SessionRecorder:
                 return ""
             return f"{v:.2f}".replace('.', ',')
 
-        row = [timestamp, f"{t_s:.3f}".replace('.', ','), f(t1), f(t2), f(t3), ""]
+        row = [timestamp, f"{t_s:.3f}".replace('.', ','), f(t1), f(t2), f(t3), self.flag_id, "", ""]
         self.csv_wr.writerow(row)
         self._csv_rows_since_flush += 1
         if self._csv_rows_since_flush >= self._csv_flush_every:
@@ -419,6 +423,10 @@ class SessionRecorder:
         self.measure_base = None
         self.session_id = None
         self.json_path = None
+
+        if self._ping_listener is not None:
+            self._ping_listener.stop()
+            self._ping_listener = None
 
         print("[REC] aborted session")
 

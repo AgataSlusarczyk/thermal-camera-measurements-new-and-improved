@@ -1,3 +1,4 @@
+import json
 import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -8,7 +9,7 @@ def _get_utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class PingListener:
+class CamListener:
     def __init__(self, recorder, port: int = 5050, host: str = "0.0.0.0", verbose: bool = True):
         self.recorder = recorder
         self.port = port
@@ -49,14 +50,14 @@ class PingListener:
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
         if self.verbose:
-            print(f"[PingListener] nasłuchuję na http://{self.host}:{self.port}/ping")
+            print(f"[CamListener] nasłuchuję na http://{self.host}:{self.port}/ping")
 
     def stop(self):
         if self._server:
             self._server.shutdown()
             self._server = None
         if self.verbose:
-            print("[PingListener] zatrzymany")
+            print("[CamListener] zatrzymany")
 
     def _handle_ping(self, handler):
         rec = self.recorder
@@ -64,29 +65,52 @@ class PingListener:
         if not rec.measuring:
             handler._reply(409, "No active session")
             if self.verbose:
-                print("[PingListener] ping odrzucony – brak aktywnej sesji")
+                print("[CamListener] ping odrzucony – brak aktywnej sesji")
             return
 
-        # 1. Inkrementuj flag_id (int, start od 1)
+        # Odczytaj JSON z body – wymagany
+        try:
+            length = int(handler.headers.get("Content-Length", 0))
+            body = handler.rfile.read(length)
+            data = json.loads(body)
+            scenario = data["scenario"]
+            duration = data["duration"]
+        except Exception as e:
+            handler._reply(400, f"Bad request: {e}")
+            if self.verbose:
+                print(f"[CamListener] ping odrzucony – zły JSON: {e}")
+            return
+
+        # Inkrementuj flag_id
         rec.flag_id += 1
         new_flag = rec.flag_id
 
-        # 2. Timestamp zdarzenia
+        # Timestamp
         utc_now = _get_utc_now()
         t_s = f"{time.monotonic() - rec.t0_mono:.3f}".replace('.', ',')
 
-        # 3. Wiersz-marker w CSV: temp_roi* puste (to znacznik, nie pomiar temperatury)
+        # Zapis do CSV
         rec.csv_wr.writerow([
-            utc_now.isoformat() + "Z",  # timestamp
+            utc_now.isoformat() + "Z",
             t_s,
-            "",
-            "",
-            "",
+            "",        # temp_roi1
+            "",        # temp_roi2
+            "",        # temp_roi3
             new_flag,
+            scenario,
+            duration,
         ])
         rec.csv_fh.flush()
+        if rec.session_id is not None and rec._dbw is not None:
+            rec._dbw.enqueue(
+                rec.session_id,
+                utc_now.replace(tzinfo=None),  # psycopg2 lubi naive datetime
+                float(t_s.replace(',', '.')),
+                None, None, None,  # temps puste
+                new_flag,
+            )
 
         if self.verbose:
-            print(f"[PingListener] PING @ t={t_s}s | flag_id -> {new_flag}")
+            print(f"[CamListener] PING @ t={t_s}s | flag_id={new_flag} | scenario={scenario} duration={duration}")
 
         handler._reply(200, f"flag_id={new_flag}")
