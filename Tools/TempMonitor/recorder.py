@@ -17,7 +17,6 @@ from config import OUTPUT_DIR as DEFAULT_OUTPUT_DIR
 from config import VIDEO_FPS
 from cam_listener import CamListener
 
-
 # Supabase (DB)
 DB_CONN_STR = (
     "x"
@@ -27,27 +26,26 @@ DB_CONN_STR = (
 
 # Czas z NTP
 
-NTP_SERVER = "0.pl.pool.ntp.org" #need to be changed to "192.168.1.100"
+NTP_SERVER = "192.168.198.233"  # need to be changed to "192.168.1.100"
 NTP_PORT = 123
-NTP_DELTA = 2208988800 
+NTP_DELTA = 2208988800
 
 
 def get_utc_now() -> datetime.datetime:
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(1.0)
-        msg = b"\x1b" + 47 * b"\0" 
-        sock.sendto(msg, (NTP_SERVER, NTP_PORT))
-        data, _addr = sock.recvfrom(48)
-        if data and len(data) >= 48:
-            unpacked = struct.unpack("!12I", data)
-            tx_timestamp = unpacked[10] 
-            unix_time = tx_timestamp - NTP_DELTA
-            return datetime.datetime.utcfromtimestamp(unix_time)
-    except Exception:
-        pass
-
     return datetime.datetime.utcnow()
+    # try:
+    #     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #     sock.settimeout(1.0)
+    #     msg = b"\x1b" + 47 * b"\0"
+    #     sock.sendto(msg, (NTP_SERVER, NTP_PORT))
+    #     data, _addr = sock.recvfrom(48)
+    #     if data and len(data) >= 48:
+    #         unpacked = struct.unpack("!12I", data)
+    #         tx_timestamp = unpacked[10]
+    #         unix_time = tx_timestamp - NTP_DELTA
+    #         return datetime.datetime.utcfromtimestamp(unix_time)
+    # except Exception:
+    #     pass
 
 
 def check_ntp_available(timeout: float = 1.0) -> bool:
@@ -187,7 +185,8 @@ class _DBWorker(threading.Thread):
 
 
 class SessionRecorder:
-    def __init__(self, output_dir: str = DEFAULT_OUTPUT_DIR, timezone_name: str = "UTC", db_conn_str: str = DB_CONN_STR):
+    def __init__(self, output_dir: str = DEFAULT_OUTPUT_DIR, timezone_name: str = "UTC",
+                 db_conn_str: str = DB_CONN_STR):
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -202,7 +201,7 @@ class SessionRecorder:
         self.csv_fh = None
         self.csv_wr = None
         self._csv_rows_since_flush = 0
-        self._csv_flush_every = 10 
+        self._csv_flush_every = 10
 
         # JSON
         self.json_path = None
@@ -223,7 +222,6 @@ class SessionRecorder:
         # Ping
         self.flag_id = 0
         self._ping_listener = None
-
 
         self._dbw = None  # type: _DBWorker | None
 
@@ -253,6 +251,9 @@ class SessionRecorder:
         if self.measuring:
             return
 
+        self.started_utc = datetime.datetime.utcnow()
+        self.t0_mono = time.monotonic()
+
         base = self._unique_name()
         self.measure_base = base
 
@@ -262,17 +263,18 @@ class SessionRecorder:
         # CSV
         self.csv_fh = open(csv_path, "w", newline="", encoding="utf-8")
         self.csv_wr = csv.writer(self.csv_fh, delimiter=';', lineterminator='\n')
-        self.csv_wr.writerow(["timestamp", "t_s", "temp_roi1_c", "temp_roi2_c", "temp_roi3_c", "flag_id", "scenario", "duration_sec"])
+        self.csv_wr.writerow(
+            ["timestamp", "t_s", "temp_roi1_c", "temp_roi2_c", "temp_roi3_c", "flag_id", "scenario", "duration_sec"])
         self._csv_rows_since_flush = 0
 
         # JSON – metadane
         self.json_path = json_path
-        self.started_utc = get_utc_now()
+
         started_local = self._to_local(self.started_utc)
         meta = {
             "session_id": None,
-            "started_utc": self.started_utc.isoformat() + "Z",  
-            "started_local": started_local.isoformat(),         
+            "started_utc": self.started_utc.isoformat() + "Z",
+            "started_local": started_local.isoformat(),
             "timezone_name": self.timezone_name,
             "aborted": False,
         }
@@ -284,7 +286,6 @@ class SessionRecorder:
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
 
-        self.t0_mono = time.monotonic()
         self.measuring = True
         self.flag_id = 0
 
@@ -299,7 +300,6 @@ class SessionRecorder:
         self._ping_listener.start()
 
         print(f"[REC] start session {self.session_id} -> {csv_path}")
-
 
     def log_sample_multi(self, temps_c):
         if not self.measuring:
@@ -321,7 +321,7 @@ class SessionRecorder:
                 return ""
             return f"{v:.2f}".replace('.', ',')
 
-        row = [timestamp, f"{t_s:.3f}".replace('.', ','), f(t1), f(t2), f(t3), self.flag_id, "", ""]
+        row = [timestamp, f"{t_s}".replace('.', ','), f(t1), f(t2), f(t3), self.flag_id, "", ""]
         self.csv_wr.writerow(row)
         self._csv_rows_since_flush += 1
         if self._csv_rows_since_flush >= self._csv_flush_every:

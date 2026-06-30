@@ -23,8 +23,12 @@ class CamListener:
 
         class _Handler(BaseHTTPRequestHandler):
             def do_POST(self):
-                if self.path == "/ping":
-                    listener._handle_ping(self)
+                if self.path == "/scenario":
+                    listener._handle_scenario(self)
+                elif self.path == "/stop":
+                    listener._handle_stop(self)
+                elif self.path == "/hardstop":
+                    listener._handle_hardstop(self)
                 else:
                     self._reply(404, "Not Found")
 
@@ -59,7 +63,7 @@ class CamListener:
         if self.verbose:
             print("[CamListener] zatrzymany")
 
-    def _handle_ping(self, handler):
+    def _handle_scenario(self, handler):
         rec = self.recorder
 
         if not rec.measuring:
@@ -93,9 +97,9 @@ class CamListener:
         rec.csv_wr.writerow([
             utc_now.isoformat() + "Z",
             t_s,
-            "",        # temp_roi1
-            "",        # temp_roi2
-            "",        # temp_roi3
+            "",  # temp_roi1
+            "",  # temp_roi2
+            "",  # temp_roi3
             new_flag,
             scenario,
             duration,
@@ -114,3 +118,63 @@ class CamListener:
             print(f"[CamListener] PING @ t={t_s}s | flag_id={new_flag} | scenario={scenario} duration={duration}")
 
         handler._reply(200, f"flag_id={new_flag}")
+
+    def _handle_stop(self, handler):
+        rec = self.recorder
+
+        if not rec.measuring:
+            handler._reply(409, "No active session")
+            return
+
+        rec.flag_id += 1
+        new_flag = rec.flag_id
+
+        utc_now = _get_utc_now()
+        t_s = f"{time.monotonic() - rec.t0_mono:.3f}".replace('.', ',')
+
+        rec.csv_wr.writerow([
+            utc_now.isoformat() + "Z",
+            t_s,
+            "",
+            "",
+            "",
+            new_flag,
+            0,
+            0,
+        ])
+        rec.csv_fh.flush()
+
+        if self.verbose:
+            print(f"[CamListener] STOP @ t={t_s}s | flag_id={new_flag}")
+
+        handler._reply(200, "STOP")
+
+def _handle_hardstop(self, handler):
+    rec = self.recorder
+
+    if not rec.measuring:
+        handler._reply(409, "No active session")
+        return
+
+    rec.flag_id += 1
+    new_flag = rec.flag_id
+
+    utc_now = _get_utc_now()
+    t_s = f"{time.monotonic() - rec.t0_mono:.3f}".replace('.', ',')
+
+    rec.csv_wr.writerow([
+        utc_now.isoformat() + "Z",
+        t_s,
+        "",
+        "",
+        "",
+        new_flag,
+        -1,
+        0,
+    ])
+    rec.csv_fh.flush()
+
+    if self.verbose:
+        print(f"[CamListener] HARD STOP @ t={t_s}s | flag_id={new_flag}")
+
+    handler._reply(200, "HARD STOP")
